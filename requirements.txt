@@ -1,1 +1,2 @@
-bnVtcHk+PTEuMjQKbWF0cGxvdGxpYj49My43Cg==
+numpy>=1.24
+matplotlib>=3.7
