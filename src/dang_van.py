@@ -1,8 +1,7 @@
-"""Educational implementation of a macroscopic Dang Van fatigue check.
+"""Implémentation pédagogique d'une vérification macroscopique de Dang Van.
 
-Stress components use the order [sxx, syy, szz, sxy, syz, sxz] in MPa.
-The implementation deliberately exposes every modelling step so that it can be
-reviewed and adapted to a validated industrial workflow.
+Les composantes du tenseur sont ordonnées comme suit :
+[sigma_xx, sigma_yy, sigma_zz, tau_xy, tau_yz, tau_xz], en MPa.
 """
 
 from dataclasses import dataclass
@@ -12,111 +11,123 @@ import numpy as np
 
 
 @dataclass(frozen=True)
-class DangVanMaterial:
-    """Material limits used by the Dang Van line tau + a*p <= b."""
+class MateriauDangVan:
+    """Limites d'endurance utilisées dans la droite tau + a*p <= b."""
 
-    reversed_bending_limit: float
-    reversed_torsion_limit: float
+    limite_flexion_alternee: float
+    limite_torsion_alternee: float
 
     def __post_init__(self) -> None:
-        if self.reversed_bending_limit <= 0 or self.reversed_torsion_limit <= 0:
-            raise ValueError("Fatigue limits must be strictly positive.")
+        if self.limite_flexion_alternee <= 0 or self.limite_torsion_alternee <= 0:
+            raise ValueError("Les limites d'endurance doivent être strictement positives.")
 
     @property
     def a(self) -> float:
-        return 3.0 * self.reversed_torsion_limit / self.reversed_bending_limit - 1.5
+        """Pente de la droite de Dang Van."""
+        return 3.0 * self.limite_torsion_alternee / self.limite_flexion_alternee - 1.5
 
     @property
     def b(self) -> float:
-        return self.reversed_torsion_limit
+        """Ordonnée à l'origine de la droite de Dang Van, en MPa."""
+        return self.limite_torsion_alternee
 
 
 @dataclass(frozen=True)
-class DangVanResult:
-    equivalent_stress: float
-    safety_factor: float
-    critical_normal: np.ndarray
-    critical_direction: np.ndarray
-    critical_time_index: int
+class ResultatDangVan:
+    """Résultat de la recherche du plan critique."""
+
+    contrainte_equivalente: float
+    coefficient_securite: float
+    normale_critique: np.ndarray
+    direction_critique: np.ndarray
+    indice_temps_critique: int
 
 
-def voigt_to_tensor(stress_history: np.ndarray) -> np.ndarray:
-    """Convert an (N, 6) Voigt history into N symmetric 3x3 tensors."""
-    stress_history = np.asarray(stress_history, dtype=float)
-    if stress_history.ndim != 2 or stress_history.shape[1] != 6:
-        raise ValueError("stress_history must have shape (N, 6).")
-    tensors = np.zeros((len(stress_history), 3, 3), dtype=float)
-    tensors[:, 0, 0], tensors[:, 1, 1], tensors[:, 2, 2] = stress_history[:, :3].T
-    tensors[:, 0, 1] = tensors[:, 1, 0] = stress_history[:, 3]
-    tensors[:, 1, 2] = tensors[:, 2, 1] = stress_history[:, 4]
-    tensors[:, 0, 2] = tensors[:, 2, 0] = stress_history[:, 5]
-    return tensors
+def voigt_vers_tenseur(historique_contraintes: np.ndarray) -> np.ndarray:
+    """Convertit un historique (N, 6) en N tenseurs symétriques 3 x 3."""
+    historique_contraintes = np.asarray(historique_contraintes, dtype=float)
+    if historique_contraintes.ndim != 2 or historique_contraintes.shape[1] != 6:
+        raise ValueError("L'historique des contraintes doit avoir la forme (N, 6).")
+
+    tenseurs = np.zeros((len(historique_contraintes), 3, 3), dtype=float)
+    tenseurs[:, 0, 0], tenseurs[:, 1, 1], tenseurs[:, 2, 2] = historique_contraintes[:, :3].T
+    tenseurs[:, 0, 1] = tenseurs[:, 1, 0] = historique_contraintes[:, 3]
+    tenseurs[:, 1, 2] = tenseurs[:, 2, 1] = historique_contraintes[:, 4]
+    tenseurs[:, 0, 2] = tenseurs[:, 2, 0] = historique_contraintes[:, 5]
+    return tenseurs
 
 
-def hydrostatic_stress(tensors: np.ndarray) -> np.ndarray:
-    """Return p(t) = trace(sigma(t))/3 in MPa."""
-    return np.trace(tensors, axis1=1, axis2=2) / 3.0
+def contrainte_hydrostatique(tenseurs: np.ndarray) -> np.ndarray:
+    """Calcule p(t) = trace(sigma(t))/3, en MPa."""
+    return np.trace(tenseurs, axis1=1, axis2=2) / 3.0
 
 
-def _orientations(n_theta: int, n_phi: int, n_psi: int):
-    """Generate plane normals n and in-plane shear directions m."""
+def _orientations(nb_theta: int, nb_phi: int, nb_psi: int):
+    """Génère les normales de plans et les directions tangentielles."""
     for theta, phi in product(
-        np.linspace(0.0, np.pi / 2.0, n_theta, endpoint=True),
-        np.linspace(0.0, 2.0 * np.pi, n_phi, endpoint=False),
+        np.linspace(0.0, np.pi / 2.0, nb_theta, endpoint=True),
+        np.linspace(0.0, 2.0 * np.pi, nb_phi, endpoint=False),
     ):
-        n = np.array([
+        normale = np.array([
             np.sin(theta) * np.cos(phi),
             np.sin(theta) * np.sin(phi),
             np.cos(theta),
         ])
-        e1 = np.array([np.cos(theta) * np.cos(phi), np.cos(theta) * np.sin(phi), -np.sin(theta)])
-        e2 = np.array([-np.sin(phi), np.cos(phi), 0.0])
-        for psi in np.linspace(0.0, np.pi, n_psi, endpoint=False):
-            yield n, np.cos(psi) * e1 + np.sin(psi) * e2
+        base_1 = np.array([
+            np.cos(theta) * np.cos(phi),
+            np.cos(theta) * np.sin(phi),
+            -np.sin(theta),
+        ])
+        base_2 = np.array([-np.sin(phi), np.cos(phi), 0.0])
+        for psi in np.linspace(0.0, np.pi, nb_psi, endpoint=False):
+            yield normale, np.cos(psi) * base_1 + np.sin(psi) * base_2
 
 
-def evaluate_dang_van(
-    stress_history: np.ndarray,
-    material: DangVanMaterial,
-    n_theta: int = 10,
-    n_phi: int = 20,
-    n_psi: int = 18,
-) -> DangVanResult:
-    """Search the most damaging plane/direction over a periodic stress history.
+def evaluer_dang_van(
+    historique_contraintes: np.ndarray,
+    materiau: MateriauDangVan,
+    nb_theta: int = 10,
+    nb_phi: int = 20,
+    nb_psi: int = 18,
+) -> ResultatDangVan:
+    """Recherche le plan et la direction les plus sollicités sur un cycle.
 
-    The alternating resolved shear is obtained by removing the midrange of the
-    resolved shear history. The maximum of |tau_alt(t)| + a*p(t) is then sought
-    over time and sampled orientations.
+    La contrainte de cisaillement alternée est obtenue en retirant la valeur
+    médiane de l'historique de cisaillement résolu. Le maximum temporel de
+    |tau_a(t)| + a*p(t) est ensuite recherché sur les orientations discrétisées.
     """
-    if min(n_theta, n_phi, n_psi) < 2:
-        raise ValueError("Orientation discretisation values must be >= 2.")
+    if min(nb_theta, nb_phi, nb_psi) < 2:
+        raise ValueError("Les discrétisations d'orientation doivent être au moins égales à 2.")
 
-    tensors = voigt_to_tensor(stress_history)
-    pressure = hydrostatic_stress(tensors)
-    best_value = -np.inf
-    best_n = best_m = None
-    best_time = 0
+    tenseurs = voigt_vers_tenseur(historique_contraintes)
+    pression_hydrostatique = contrainte_hydrostatique(tenseurs)
+    valeur_maximale = -np.inf
+    meilleure_normale = meilleure_direction = None
+    meilleur_indice_temps = 0
 
-    for normal, direction in _orientations(n_theta, n_phi, n_psi):
-        resolved_shear = np.einsum("i,tij,j->t", direction, tensors, normal)
-        midrange = 0.5 * (resolved_shear.max() + resolved_shear.min())
-        alternating_shear = np.abs(resolved_shear - midrange)
-        indicator = alternating_shear + material.a * pressure
-        time_index = int(np.argmax(indicator))
-        if indicator[time_index] > best_value:
-            best_value = float(indicator[time_index])
-            best_n = normal.copy()
-            best_m = direction.copy()
-            best_time = time_index
+    for normale, direction in _orientations(nb_theta, nb_phi, nb_psi):
+        cisaillement_resolu = np.einsum("i,tij,j->t", direction, tenseurs, normale)
+        valeur_mediane = 0.5 * (cisaillement_resolu.max() + cisaillement_resolu.min())
+        cisaillement_alterne = np.abs(cisaillement_resolu - valeur_mediane)
+        indicateur = cisaillement_alterne + materiau.a * pression_hydrostatique
+        indice_temps = int(np.argmax(indicateur))
+        if indicateur[indice_temps] > valeur_maximale:
+            valeur_maximale = float(indicateur[indice_temps])
+            meilleure_normale = normale.copy()
+            meilleure_direction = direction.copy()
+            meilleur_indice_temps = indice_temps
 
-    safety_factor = np.inf if best_value <= 0 else material.b / best_value
-    return DangVanResult(best_value, float(safety_factor), best_n, best_m, best_time)
+    coefficient_securite = np.inf if valeur_maximale <= 0 else materiau.b / valeur_maximale
+    return ResultatDangVan(
+        valeur_maximale, float(coefficient_securite), meilleure_normale,
+        meilleure_direction, meilleur_indice_temps
+    )
 
 
-def synthetic_non_proportional_history(n_points: int = 361) -> tuple[np.ndarray, np.ndarray]:
-    """Create a generic out-of-phase tension/torsion cycle in MPa."""
-    phase = np.linspace(0.0, 2.0 * np.pi, n_points)
-    stress = np.zeros((n_points, 6))
-    stress[:, 0] = 80.0 + 140.0 * np.sin(phase)
-    stress[:, 3] = 75.0 * np.sin(phase + np.pi / 2.0)
-    return phase, stress
+def creer_historique_non_proportionnel(nb_points: int = 361) -> tuple[np.ndarray, np.ndarray]:
+    """Crée un cycle générique traction-torsion déphasé, exprimé en MPa."""
+    phase = np.linspace(0.0, 2.0 * np.pi, nb_points)
+    contraintes = np.zeros((nb_points, 6))
+    contraintes[:, 0] = 80.0 + 140.0 * np.sin(phase)
+    contraintes[:, 3] = 75.0 * np.sin(phase + np.pi / 2.0)
+    return phase, contraintes
