@@ -1,1 +1,37 @@
-aW1wb3J0IHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKaW1wb3J0IHVuaXR0ZXN0CgppbXBvcnQgbnVtcHkgYXMgbnAKCnN5cy5wYXRoLmluc2VydCgwLCBzdHIoUGF0aChfX2ZpbGVfXykucGFyZW50c1sxXSAvICJzcmMiKSkKZnJvbSBkYW5nX3ZhbiBpbXBvcnQgRGFuZ1Zhbk1hdGVyaWFsLCBldmFsdWF0ZV9kYW5nX3ZhbiwgaHlkcm9zdGF0aWNfc3RyZXNzLCB2b2lndF90b190ZW5zb3IKCgpjbGFzcyBEYW5nVmFuVGVzdHModW5pdHRlc3QuVGVzdENhc2UpOgogICAgZGVmIHRlc3RfbWF0ZXJpYWxfY2FsaWJyYXRpb24oc2VsZikgLT4gTm9uZToKICAgICAgICBtYXRlcmlhbCA9IERhbmdWYW5NYXRlcmlhbCgyMjAuMCwgMTMwLjApCiAgICAgICAgc2VsZi5hc3NlcnRBbG1vc3RFcXVhbChtYXRlcmlhbC5hLCAzLjAgKiAxMzAuMCAvIDIyMC4wIC0gMS41KQogICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwobWF0ZXJpYWwuYiwgMTMwLjApCgogICAgZGVmIHRlc3Rfdm9pZ3RfY29udmVyc2lvbl9hbmRfaHlkcm9zdGF0aWNfc3RyZXNzKHNlbGYpIC0+IE5vbmU6CiAgICAgICAgaGlzdG9yeSA9IG5wLmFycmF5KFtbOTAuMCwgNjAuMCwgMzAuMCwgMTAuMCwgMjAuMCwgMTUuMF1dKQogICAgICAgIHRlbnNvcnMgPSB2b2lndF90b190ZW5zb3IoaGlzdG9yeSkKICAgICAgICBzZWxmLmFzc2VydEVxdWFsKHRlbnNvcnMuc2hhcGUsICgxLCAzLCAzKSkKICAgICAgICBzZWxmLmFzc2VydFRydWUobnAuYWxsY2xvc2UodGVuc29yc1swXSwgdGVuc29yc1swXS5UKSkKICAgICAgICBzZWxmLmFzc2VydEFsbW9zdEVxdWFsKGh5ZHJvc3RhdGljX3N0cmVzcyh0ZW5zb3JzKVswXSwgNjAuMCkKCiAgICBkZWYgdGVzdF96ZXJvX2hpc3RvcnlfaGFzX2luZmluaXRlX3NhZmV0eV9mYWN0b3Ioc2VsZikgLT4gTm9uZToKICAgICAgICByZXN1bHQgPSBldmFsdWF0ZV9kYW5nX3ZhbigKICAgICAgICAgICAgbnAuemVyb3MoKDIwLCA2KSksIERhbmdWYW5NYXRlcmlhbCgyMjAuMCwgMTMwLjApLCAzLCA0LCA0CiAgICAgICAgKQogICAgICAgIHNlbGYuYXNzZXJ0QWxtb3N0RXF1YWwocmVzdWx0LmVxdWl2YWxlbnRfc3RyZXNzLCAwLjApCiAgICAgICAgc2VsZi5hc3NlcnRUcnVlKG5wLmlzaW5mKHJlc3VsdC5zYWZldHlfZmFjdG9yKSkKCiAgICBkZWYgdGVzdF9pbnZhbGlkX2hpc3RvcnlfaXNfcmVqZWN0ZWQoc2VsZikgLT4gTm9uZToKICAgICAgICB3aXRoIHNlbGYuYXNzZXJ0UmFpc2VzKFZhbHVlRXJyb3IpOgogICAgICAgICAgICB2b2lndF90b190ZW5zb3IobnAuemVyb3MoKDEwLCA1KSkpCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIHVuaXR0ZXN0Lm1haW4oKQo=
+import sys
+from pathlib import Path
+import unittest
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
+from dang_van import DangVanMaterial, evaluate_dang_van, hydrostatic_stress, voigt_to_tensor
+
+
+class DangVanTests(unittest.TestCase):
+    def test_material_calibration(self) -> None:
+        material = DangVanMaterial(220.0, 130.0)
+        self.assertAlmostEqual(material.a, 3.0 * 130.0 / 220.0 - 1.5)
+        self.assertEqual(material.b, 130.0)
+
+    def test_voigt_conversion_and_hydrostatic_stress(self) -> None:
+        history = np.array([[90.0, 60.0, 30.0, 10.0, 20.0, 15.0]])
+        tensors = voigt_to_tensor(history)
+        self.assertEqual(tensors.shape, (1, 3, 3))
+        self.assertTrue(np.allclose(tensors[0], tensors[0].T))
+        self.assertAlmostEqual(hydrostatic_stress(tensors)[0], 60.0)
+
+    def test_zero_history_has_infinite_safety_factor(self) -> None:
+        result = evaluate_dang_van(
+            np.zeros((20, 6)), DangVanMaterial(220.0, 130.0), 3, 4, 4
+        )
+        self.assertAlmostEqual(result.equivalent_stress, 0.0)
+        self.assertTrue(np.isinf(result.safety_factor))
+
+    def test_invalid_history_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            voigt_to_tensor(np.zeros((10, 5)))
+
+
+if __name__ == "__main__":
+    unittest.main()
